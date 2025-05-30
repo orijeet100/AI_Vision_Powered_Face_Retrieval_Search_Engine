@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse
 import shutil, uuid, os
-from main.face_matcher import process_uploads, match_faces
+from app.face_matcher import process_uploads, match_faces
 
 app = FastAPI()
 
