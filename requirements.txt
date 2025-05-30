@@ -1,0 +1,18 @@
+# Core numerical stack
+numpy
+
+# ONNX for InsightFace embedding
+onnxruntime
+
+# OpenCV (latest with cp37+ abi3 wheel)
+opencv-python-headless
+
+# InsightFace (pulls onnxruntime, numpy, etc.)
+insightface
+
+# FAISS: install via pipwin workaround OR use placeholder (see note below)
+# Comment this line if installing FAISS manually
+faiss-cpu
+
+fastapi
+uvicorn
