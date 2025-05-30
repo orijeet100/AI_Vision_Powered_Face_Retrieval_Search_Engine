@@ -27,4 +27,4 @@ def search_faiss(query, index, paths, threshold=0.7):
     query = query.reshape(1, -1).astype("float32")
     faiss.normalize_L2(query)
     D, I = index.search(query, k=len(paths))
-    return [paths[i] for d, i in zip(D[0], I[0]) if (1 - d/2) < threshold]
+    return [paths[i] for d, i in zip(D[0], I[0]) if (1 - d / 2) < threshold]
