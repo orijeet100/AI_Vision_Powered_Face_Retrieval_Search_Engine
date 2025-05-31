@@ -77,8 +77,8 @@
 #             file_name="target_photos.zip",
 #             mime="application/zip"
 #         )
-#
-#
+
+
 
 
 
@@ -87,68 +87,67 @@
 import os
 import cv2
 import faiss
-import pickle
-import shutil
 import zipfile
-import numpy as np
+import shutil
+import pickle
 import streamlit as st
+import numpy as np
+from io import BytesIO
 from pathlib import Path
 from typing import List
 from insightface.app import FaceAnalysis
 
-# ─── Config ─────────────────────────────────────────────────────────────
-DATABASE_DIR = Path("database")          # user-uploaded folder of jpg images
+# ───── Setup ─────────────────────────────────────────────────────────────
+DATABASE_DIR = Path("database")
 DATA_DIR = Path("data")
-IMG_DIR = DATA_DIR / "user_photos"       # internal vault
+IMG_DIR = DATA_DIR / "user_photos"
+TARGET_DIR = Path("target_photos")
 INDEX_FILE = DATA_DIR / "faces.faiss"
 META_FILE = DATA_DIR / "faces.pkl"
-TARGET_DIR = Path("target_photos")       # result folder
-DIST_THR = 0.7                           # cosine distance threshold
+DIST_THR = 0.7
 
-# ─── Init Directories ────────────────────────────────────────────────────
-for path in [DATA_DIR, IMG_DIR, TARGET_DIR]:
-    path.mkdir(exist_ok=True)
+# ───── Ensure dirs ───────────────────────────────────────────────────────
+DATA_DIR.mkdir(exist_ok=True)
+IMG_DIR.mkdir(exist_ok=True)
+TARGET_DIR.mkdir(exist_ok=True)
 
-# ─── Model ───────────────────────────────────────────────────────────────
-@st.cache_resource
+# ───── Model Load ────────────────────────────────────────────────────────
+@st.cache_resource(show_spinner="Loading face model (~600MB)...")
 def load_model():
-    model = FaceAnalysis(name="buffalo_l")
-    model.prepare(ctx_id=0, det_size=(640, 640))
-    return model
+    app = FaceAnalysis(name="buffalo_l")
+    app.prepare(ctx_id=0, det_size=(640, 640))
+    return app
 
 face_app = load_model()
 
-# ─── Helper Functions ────────────────────────────────────────────────────
-def _load_or_create_index(dim: int = 512):
-    if INDEX_FILE.exists():
-        return faiss.read_index(str(INDEX_FILE))
-    return faiss.IndexFlatIP(dim)
+# ───── Index helpers ─────────────────────────────────────────────────────
+def _load_index():
+    return faiss.read_index(str(INDEX_FILE)) if INDEX_FILE.exists() else faiss.IndexFlatIP(512)
 
-def _load_meta() -> List[str]:
-    if META_FILE.exists():
-        return pickle.load(open(META_FILE, "rb"))
-    return []
+def _load_meta():
+    return pickle.load(open(META_FILE, "rb")) if META_FILE.exists() else []
 
 def _save_index(index, meta):
     faiss.write_index(index, str(INDEX_FILE))
     with open(META_FILE, "wb") as f:
         pickle.dump(meta, f)
 
-def add_images(files: List):
-    index = _load_or_create_index()
+# ───── Add user images ───────────────────────────────────────────────────
+def add_images(files):
+    index = _load_index()
     meta = _load_meta()
-
     new_vecs, new_paths = [], []
-    for uploaded_file in files:
-        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-        img = cv2.imdecode(file_bytes, 1)
+
+    for file in files:
+        file_bytes = file.read()
+        img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             continue
         faces = face_app.get(img)
         if not faces:
             continue
 
-        dst_path = IMG_DIR / uploaded_file.name
+        dst_path = IMG_DIR / file.name
         cv2.imwrite(str(dst_path), img)
 
         for face in faces:
@@ -164,84 +163,82 @@ def add_images(files: List):
         return len(new_vecs)
     return 0
 
-def search(reference_img_bytes, k: int = 50):
-    if not INDEX_FILE.exists() or not META_FILE.exists():
-        raise RuntimeError("Index not found. Add images first.")
+# ───── Search ────────────────────────────────────────────────────────────
+def match_faces(reference_file) -> BytesIO:
+    shutil.rmtree(TARGET_DIR, ignore_errors=True)
+    TARGET_DIR.mkdir(exist_ok=True)
 
-    index = _load_or_create_index()
+    index = _load_index()
     meta = _load_meta()
 
-    TARGET_DIR.mkdir(exist_ok=True)
-    for f in TARGET_DIR.glob("*"):
-        f.unlink()
-
-    img = cv2.imdecode(np.frombuffer(reference_img_bytes, np.uint8), 1)
-    if img is None:
-        raise FileNotFoundError("Invalid image uploaded.")
-
+    file_bytes = reference_file.read()
+    img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
     faces = face_app.get(img)
     if not faces:
-        raise ValueError("No face detected in reference image.")
+        return None, "No face detected."
 
     q = faces[0]["embedding"].astype("float32").reshape(1, -1)
     faiss.normalize_L2(q)
-    D, I = index.search(q, min(k, index.ntotal))
+    D, I = index.search(q, min(50, index.ntotal))
 
     results = []
     for d, i in zip(D[0], I[0]):
         similarity = d
         distance = 1 - similarity / 2
         if distance < DIST_THR:
-            src_path = meta[i]
-            tgt_path = TARGET_DIR / Path(src_path).name
-            img_match = cv2.imread(src_path)
+            source_path = meta[i]
+            img_match = cv2.imread(source_path)
             if img_match is not None:
-                cv2.imwrite(str(tgt_path), img_match)
-                results.append((src_path, similarity))
+                fname = Path(source_path).name
+                cv2.imwrite(str(TARGET_DIR / fname), img_match)
+                results.append((str(TARGET_DIR / fname), similarity))
 
-    return sorted(results, key=lambda x: -x[1])
+    if not results:
+        return None, "No faces matched."
 
-def zip_target_photos():
-    zip_path = Path("matched_photos.zip")
-    with zipfile.ZipFile(zip_path, "w") as zipf:
-        for file in TARGET_DIR.glob("*.jpg"):
-            zipf.write(file, arcname=file.name)
-    return zip_path
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zipf:
+        for img_path, _ in results:
+            zipf.write(img_path, arcname=Path(img_path).name)
+    zip_buffer.seek(0)
+    return zip_buffer, results
 
-# ─── Streamlit UI ────────────────────────────────────────────────────────
-st.set_page_config(page_title="Face Search", layout="centered")
-st.title("🧠 Face Match App")
+# ───── UI ────────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Face Retrieval App", layout="centered")
+st.title("🔍 Face Retrieval System")
 
-# Step 1: Upload face database
-st.subheader("Step 1: Upload Photos to Build Index")
-uploaded_photos = st.file_uploader("Upload JPG images", type=["jpg"], accept_multiple_files=True)
-if st.button("➕ Add to Index"):
-    if uploaded_photos:
-        with st.spinner("Indexing faces..."):
-            added_count = add_images(uploaded_photos)
-            st.success(f"✅ Indexed {added_count} faces.")
-    else:
-        st.warning("Please upload at least one image.")
+# Upload images
+st.header("Step 1: Upload Images to Index")
+img_files = st.file_uploader("Upload JPG images", type=["jpg", "jpeg"], accept_multiple_files=True)
 
-# Step 2: Reference image
-st.subheader("Step 2: Upload Reference Photo")
-reference_img = st.file_uploader("Upload a reference image (jpg)", type=["jpg"], key="ref")
+if img_files and st.button("📁 Add to Face Index"):
+    with st.spinner("Indexing..."):
+        count = add_images(img_files)
+        if count > 0:
+            st.success(f"✅ {count} faces indexed!")
+        else:
+            st.warning("⚠️ No faces found.")
 
-if st.button("🔍 Match Faces"):
-    if reference_img:
-        with st.spinner("Matching faces..."):
-            try:
-                matches = search(reference_img.read())
-                if matches:
-                    st.success(f"✅ Found {len(matches)} matches!")
-                    for path, sim in matches:
-                        st.image(path, caption=f"{Path(path).name} — Similarity: {sim:.2f}", width=200)
-                    zip_path = zip_target_photos()
-                    with open(zip_path, "rb") as f:
-                        st.download_button("📦 Download Matched Faces", f, file_name="matched_faces.zip")
-                else:
-                    st.error("❌ No matching faces found.")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
-    else:
-        st.warning("Please upload a reference image.")
+# Upload reference
+st.header("Step 2: Upload Reference Image")
+ref_file = st.file_uploader("Reference photo", type=["jpg", "jpeg"])
+
+if ref_file and st.button("🔍 Match Faces"):
+    with st.spinner("Matching..."):
+        zip_buffer, result = match_faces(ref_file)
+
+        if isinstance(result, str):
+            st.error(f"❌ {result}")
+        else:
+            st.success(f"✅ Found {len(result)} matched faces!")
+            st.download_button(
+                label="📦 Download Matched Images (.zip)",
+                data=zip_buffer,
+                file_name="target_photos.zip",
+                mime="application/zip"
+            )
+
+            st.subheader("Matched Faces")
+            for path, score in result:
+                st.image(path, caption=f"{Path(path).name} (score: {score:.3f})", width=200)
+
