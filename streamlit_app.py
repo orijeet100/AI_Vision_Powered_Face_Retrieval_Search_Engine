@@ -98,6 +98,8 @@ from typing import List, Tuple
 from insightface.app import FaceAnalysis
 import logging
 
+st.set_page_config(page_title="Face Retrieval App", layout="centered")
+
 # ───── Setup ─────────────────────────────────────────────────────────────
 DATABASE_DIR = Path("database")
 DATA_DIR = Path("data")
@@ -239,7 +241,7 @@ def match_faces(reference_file) -> Tuple[BytesIO, list]:
 
 
 # ───── UI ────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Face Retrieval App", layout="centered")
+
 st.title("🔍 Face Retrieval System")
 
 # Upload images
