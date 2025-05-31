@@ -96,6 +96,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import List, Tuple
 from insightface.app import FaceAnalysis
+import logging
 
 # ───── Setup ─────────────────────────────────────────────────────────────
 DATABASE_DIR = Path("database")
@@ -119,6 +120,18 @@ def load_model():
     return app
 
 face_app = load_model()
+
+import shutil
+
+def check_disk_space():
+    """Check available disk space"""
+    total, used, free = shutil.disk_usage("/")
+    st.sidebar.write(f"💾 Disk Space: {free // (1024**3)} GB free")
+    if free < 1024**3:  # Less than 1GB
+        st.warning("⚠️ Low disk space available")
+
+# Add this call in your main UI
+check_disk_space()
 
 # ───── Index helpers ─────────────────────────────────────────────────────
 def _load_index():
@@ -171,7 +184,10 @@ def match_faces(reference_file) -> Tuple[BytesIO, list]:
     index = _load_index()
     meta = _load_meta()
 
+    # Reset file pointer to beginning
+    reference_file.seek(0)
     file_bytes = reference_file.read()
+
     img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_COLOR)
     faces = face_app.get(img)
     if not faces:
@@ -182,6 +198,8 @@ def match_faces(reference_file) -> Tuple[BytesIO, list]:
     D, I = index.search(q, min(50, index.ntotal))
 
     results = []
+    matched_files = []  # Store actual file data instead of paths
+
     for d, i in zip(D[0], I[0]):
         similarity = d
         distance = 1 - similarity / 2
@@ -190,17 +208,33 @@ def match_faces(reference_file) -> Tuple[BytesIO, list]:
             img_match = cv2.imread(source_path)
             if img_match is not None:
                 fname = Path(source_path).name
-                cv2.imwrite(str(TARGET_DIR / fname), img_match)
-                results.append((str(TARGET_DIR / fname), similarity))
+                target_path = TARGET_DIR / fname
+                cv2.imwrite(str(target_path), img_match)
+
+                # Read the file data immediately
+                with open(target_path, 'rb') as f:
+                    file_data = f.read()
+                matched_files.append((fname, file_data))
+                results.append((str(target_path), similarity))
 
     if not results:
         return None, "No faces matched."
 
+    # Create ZIP with actual file data
     zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w") as zipf:
-        for img_path, _ in results:
-            zipf.write(img_path, arcname=Path(img_path).name)
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for fname, file_data in matched_files:
+            zipf.writestr(fname, file_data)
+
+    # Important: Reset buffer position
     zip_buffer.seek(0)
+
+    logging.basicConfig(level=logging.INFO)
+
+    # In match_faces function:
+    logging.info(f"Found {len(results)} matches")
+    logging.info(f"ZIP buffer size: {len(zip_buffer.getvalue())} bytes")
+
     return zip_buffer, results
 
 
@@ -224,32 +258,36 @@ if img_files and st.button("📁 Add to Face Index"):
 st.header("Step 2: Upload Reference Image")
 ref_file = st.file_uploader("Reference photo", type=["jpg", "jpeg"])
 
-# After face matching
+# After face matching - FIXED VERSION
 if ref_file and st.button("🔍 Match Faces"):
     with st.spinner("Matching..."):
         zip_buffer, result = match_faces(ref_file)
 
-    if isinstance(result, str):
+    if zip_buffer is None:
         st.error(f"❌ {result}")
     else:
         st.success(f"✅ Found {len(result)} matched faces!")
 
-        # Wait until ZIP is really ready
-        with st.spinner("Preparing download..."):
-            zip_data = zip_buffer.getvalue()
-            while not zip_data:
-                zip_data = zip_buffer.getvalue()
+        # Get ZIP data properly
+        zip_data = zip_buffer.getvalue()
 
-        st.download_button(
-            label="📦 Download Matched Images (.zip)",
-            data=zip_data,
-            file_name="target_photos.zip",
-            mime="application/zip"
-        )
+        # Verify ZIP data is valid
+        if len(zip_data) > 0:
+            st.download_button(
+                label="📦 Download Matched Images (.zip)",
+                data=zip_data,
+                file_name="matched_faces.zip",
+                mime="application/zip",
+                key="download_zip"
+            )
 
-        # Show preview after ZIP is downloaded-ready
-        st.subheader("Matched Faces")
-        for path, score in result:
-            st.image(path, caption=f"{Path(path).name} (score: {score:.3f})", width=200)
+            # Show file size for debugging
+            st.info(f"ZIP file size: {len(zip_data)} bytes")
 
-
+            # Show preview
+            st.subheader("Matched Faces Preview")
+            for path, score in result[:5]:  # Show only first 5 for performance
+                if Path(path).exists():
+                    st.image(path, caption=f"{Path(path).name} (score: {score:.3f})", width=200)
+        else:
+            st.error("❌ Generated ZIP file is empty")
