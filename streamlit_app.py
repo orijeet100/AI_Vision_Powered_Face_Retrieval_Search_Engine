@@ -94,7 +94,7 @@ import streamlit as st
 import numpy as np
 from io import BytesIO
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 from insightface.app import FaceAnalysis
 
 # ───── Setup ─────────────────────────────────────────────────────────────
@@ -164,7 +164,7 @@ def add_images(files):
     return 0
 
 # ───── Search ────────────────────────────────────────────────────────────
-def match_faces(reference_file) -> BytesIO:
+def match_faces(reference_file) -> Tuple[BytesIO, list]:
     shutil.rmtree(TARGET_DIR, ignore_errors=True)
     TARGET_DIR.mkdir(exist_ok=True)
 
@@ -233,7 +233,7 @@ if ref_file and st.button("🔍 Match Faces"):
             st.success(f"✅ Found {len(result)} matched faces!")
             st.download_button(
                 label="📦 Download Matched Images (.zip)",
-                data=zip_buffer,
+                data=zip_buffer.getvalue(),  # <- IMPORTANT: stream value
                 file_name="target_photos.zip",
                 mime="application/zip"
             )
