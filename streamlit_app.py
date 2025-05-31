@@ -1,9 +1,15 @@
+import os
+
 import streamlit as st
 import requests
 from io import BytesIO
 import zipfile
 
 API_BASE = "http://localhost:8000"  # replace with your Render URL
+
+st.write("Listing localhost ports...")
+st.code(os.popen("lsof -i -P -n | grep LISTEN").read())
+
 
 # ───── Health Check ─────
 try:
@@ -17,6 +23,7 @@ except Exception as e:
     st.stop()
 
 st.title("🔍 Face Matching App")
+
 
 
 # Session-level state management

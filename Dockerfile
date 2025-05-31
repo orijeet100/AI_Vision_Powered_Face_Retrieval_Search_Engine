@@ -17,5 +17,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Step 4: Copy all code
 COPY . .
 
-# Step 5: Run FastAPI + Streamlit in parallel
-CMD ["bash", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 & streamlit run streamlit_app.py --server.port 8501 --server.headless true --server.enableCORS false"]
+CMD ["bash", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 & streamlit run streamlit_app.py --server.port 8501 --server.headless true"]
