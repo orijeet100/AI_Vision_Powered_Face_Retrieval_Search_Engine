@@ -17,4 +17,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Step 4: Copy all code
 COPY . .
 
-CMD ["bash", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000 & streamlit run streamlit_app.py --server.port 8080 --server.headless true"]
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8080", "--server.headless=true"]
