@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse
 import shutil, uuid, os
 from app.face_matcher import process_uploads, match_faces
+from fastapi import FastAPI, UploadFile, File, Query, HTTPException
 
 app = FastAPI()
 
@@ -19,5 +20,11 @@ async def reference_face(session_id: str, reference: UploadFile = File(...)):
     ref_path = f"/tmp/{session_id}/reference.jpg"
     with open(ref_path, "wb") as f:
         shutil.copyfileobj(reference.file, f)
+
     zip_path = match_faces(f"/tmp/{session_id}", ref_path)
+
+    if not zip_path or not os.path.exists(zip_path):
+        raise HTTPException(status_code=404, detail="No faces matched.")
+
     return FileResponse(zip_path, filename="target_photos.zip")
+

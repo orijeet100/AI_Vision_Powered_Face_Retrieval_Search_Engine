@@ -3,61 +3,61 @@ import requests
 from io import BytesIO
 import zipfile
 
-API_BASE = "https://face-retrieval.onrender.com"  # replace with your Render URL
+API_BASE = "http://localhost:8000"  # replace with your Render URL
 
 st.title("🔍 Face Matching App")
 
-# ─────────────── Upload photo batch ───────────────
-st.header("Step 1: Upload up to 100 photos")
 
-uploaded_files = st.file_uploader(
-    "Upload multiple .jpg images",
-    type=["jpg", "jpeg"],
-    accept_multiple_files=True,
-    key="photo_batch"
-)
+# Session-level state management
+if "session_id" not in st.session_state:
+    st.session_state.session_id = None
+if "zip_ready" not in st.session_state:
+    st.session_state.zip_ready = False
+
+# Upload photos
+st.header("Step 1: Upload Photos (max 100)")
+uploaded_files = st.file_uploader("Upload .jpg images", type=["jpg", "jpeg"], accept_multiple_files=True)
+
 
 if uploaded_files:
     with st.spinner("Uploading..."):
         files = [("files", (f.name, f, "image/jpeg")) for f in uploaded_files]
-        response = requests.post(f"{API_BASE}/upload/", files=files)
-        if response.status_code == 200:
-            session_id = response.json()["session_id"]
-            st.success(f"✅ Uploaded {response.json()['uploaded']} files")
+        res = requests.post(f"{API_BASE}/upload/", files=files)
+        if res.ok:
+            st.session_state.session_id = res.json()["session_id"]
+            st.success(f"✅ Uploaded {res.json()['uploaded']} images")
         else:
-            st.error(f"Upload failed: {response.text}")
-            session_id = None
-else:
-    session_id = None
+            st.error("❌ Upload failed")
 
-# ─────────────── Reference photo ───────────────
-if session_id:
-    st.header("Step 2: Upload reference image")
-
-    ref_image = st.file_uploader(
-        "Upload a reference face image",
-        type=["jpg", "jpeg"],
-        key="ref_photo"
-    )
-
-    zip_file_bytes = None
-
-    if ref_image:
-        if st.button("🔍 Match Faces"):
-            with st.spinner("Processing and matching..."):
-                files = {"reference": (ref_image.name, ref_image, "image/jpeg")}
-                response = requests.post(
-                    f"{API_BASE}/reference/?session_id={session_id}",
-                    files=files
+# Reference photo
+if st.session_state.session_id:
+    st.header("Step 2: Upload Reference")
+    ref_image = st.file_uploader("Reference photo", type=["jpg", "jpeg"], key="ref")
+    if ref_image and st.button("🔍 Match Faces"):
+        with st.spinner("Matching..."):
+            res = requests.post(
+                f"{API_BASE}/reference/?session_id={st.session_state.session_id}",
+                files={"reference": (ref_image.name, ref_image, "image/jpeg")}
+            )
+            if res.status_code == 200:
+                st.success("Matched faces found!")
+                st.download_button(
+                    "📦 Download Target Photos",
+                    res.content,
+                    "target_photos.zip",
+                    mime="application/zip"
                 )
-                if response.status_code == 200:
-                    zip_file_bytes = BytesIO(response.content)
-                    st.success("🎯 Match complete!")
-                    st.download_button(
-                        label="📦 Download Target Photos (.zip)",
-                        data=zip_file_bytes,
-                        file_name="target_photos.zip",
-                        mime="application/zip"
-                    )
-                else:
-                    st.error(f"Matching failed: {response.text}")
+            elif res.status_code == 404:
+                st.error("❌ No faces matched.")
+            else:
+                st.error(f"Matching failed: {res.text}")
+
+    if st.session_state.zip_ready:
+        st.download_button(
+            "📦 Download Target Photos (.zip)",
+            data=st.session_state.zip_data,
+            file_name="target_photos.zip",
+            mime="application/zip"
+        )
+
+
