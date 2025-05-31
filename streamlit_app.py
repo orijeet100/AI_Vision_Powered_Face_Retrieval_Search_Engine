@@ -203,6 +203,7 @@ def match_faces(reference_file) -> Tuple[BytesIO, list]:
     zip_buffer.seek(0)
     return zip_buffer, results
 
+
 # ───── UI ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Face Retrieval App", layout="centered")
 st.title("🔍 Face Retrieval System")
@@ -223,22 +224,32 @@ if img_files and st.button("📁 Add to Face Index"):
 st.header("Step 2: Upload Reference Image")
 ref_file = st.file_uploader("Reference photo", type=["jpg", "jpeg"])
 
+# After face matching
 if ref_file and st.button("🔍 Match Faces"):
     with st.spinner("Matching..."):
         zip_buffer, result = match_faces(ref_file)
 
-        if isinstance(result, str):
-            st.error(f"❌ {result}")
-        else:
-            st.success(f"✅ Found {len(result)} matched faces!")
-            st.download_button(
-                label="📦 Download Matched Images (.zip)",
-                data=zip_buffer.getvalue(),  # <- IMPORTANT: stream value
-                file_name="target_photos.zip",
-                mime="application/zip"
-            )
+    if isinstance(result, str):
+        st.error(f"❌ {result}")
+    else:
+        st.success(f"✅ Found {len(result)} matched faces!")
 
-            st.subheader("Matched Faces")
-            for path, score in result:
-                st.image(path, caption=f"{Path(path).name} (score: {score:.3f})", width=200)
+        # Wait until ZIP is really ready
+        with st.spinner("Preparing download..."):
+            zip_data = zip_buffer.getvalue()
+            while not zip_data:
+                zip_data = zip_buffer.getvalue()
+
+        st.download_button(
+            label="📦 Download Matched Images (.zip)",
+            data=zip_data,
+            file_name="target_photos.zip",
+            mime="application/zip"
+        )
+
+        # Show preview after ZIP is downloaded-ready
+        st.subheader("Matched Faces")
+        for path, score in result:
+            st.image(path, caption=f"{Path(path).name} (score: {score:.3f})", width=200)
+
 
