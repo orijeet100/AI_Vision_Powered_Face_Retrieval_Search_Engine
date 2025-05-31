@@ -110,8 +110,13 @@ for path in [DATA_DIR, IMG_DIR, TARGET_DIR]:
     path.mkdir(exist_ok=True)
 
 # ─── Model ───────────────────────────────────────────────────────────────
-face_app = FaceAnalysis(name="buffalo_l")
-face_app.prepare(ctx_id=0, det_size=(640, 640))
+@st.cache_resource
+def load_model():
+    model = FaceAnalysis(name="buffalo_l")
+    model.prepare(ctx_id=0, det_size=(640, 640))
+    return model
+
+face_app = load_model()
 
 # ─── Helper Functions ────────────────────────────────────────────────────
 def _load_or_create_index(dim: int = 512):
