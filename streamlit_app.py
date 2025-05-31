@@ -79,10 +79,6 @@
 #         )
 
 
-
-
-
-# streamlit_app.py
 # streamlit_app.py
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -148,6 +144,32 @@ def _save_index(index, meta):
         pickle.dump(meta, f)
 
 
+# ───── Reset workflow function ───────────────────────────────────────────
+def reset_workflow():
+    """Reset all data while keeping the model loaded"""
+    try:
+        # Remove index and metadata files
+        if INDEX_FILE.exists():
+            INDEX_FILE.unlink()
+        if META_FILE.exists():
+            META_FILE.unlink()
+
+        # Clear image directories
+        if IMG_DIR.exists():
+            shutil.rmtree(IMG_DIR)
+        if TARGET_DIR.exists():
+            shutil.rmtree(TARGET_DIR)
+
+        # Recreate directories
+        IMG_DIR.mkdir(exist_ok=True)
+        TARGET_DIR.mkdir(exist_ok=True)
+
+        return True
+    except Exception as e:
+        st.error(f"Error resetting workflow: {e}")
+        return False
+
+
 # ───── Add user images ───────────────────────────────────────────────────
 def add_images(files):
     index = _load_index()
@@ -164,8 +186,11 @@ def add_images(files):
         if not faces:
             continue
 
+        # Save original file bytes instead of re-encoding
         dst_path = IMG_DIR / file.name
-        cv2.imwrite(str(dst_path), img)
+        with open(dst_path, 'wb') as f:
+            file.seek(0)  # Reset pointer again
+            f.write(file.read())  # Save original bytes
 
         for face in faces:
             new_vecs.append(face["embedding"])
@@ -249,7 +274,7 @@ def match_faces(reference_file) -> Tuple[Optional[bytes], str]:
 
         # Create ZIP file using temporary file for better reliability
         with tempfile.NamedTemporaryFile() as temp_file:
-            with zipfile.ZipFile(temp_file, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zipf:
+            with zipfile.ZipFile(temp_file, "w", zipfile.ZIP_STORED) as zipf:  # No compression for images
                 for fname, img_data in matched_images:
                     zipf.writestr(fname, img_data)
 
@@ -273,75 +298,123 @@ def create_download_link(zip_bytes: bytes, filename: str = "target_images.zip") 
     return f'<a href="data:application/zip;base64,{b64}" download="{filename}">📦 Click here to download {filename}</a>'
 
 
+# ───── Session State Management ──────────────────────────────────────────
+if 'database_uploaded' not in st.session_state:
+    st.session_state.database_uploaded = False
+if 'faces_indexed' not in st.session_state:
+    st.session_state.faces_indexed = False
+if 'reference_uploaded' not in st.session_state:
+    st.session_state.reference_uploaded = False
+
 # ───── UI ────────────────────────────────────────────────────────────────
 st.title("🔍 Face Retrieval System")
 
-# Show current database status
+# Check current database status
 index = _load_index()
 meta = _load_meta()
-st.sidebar.info(f"Database: {index.ntotal} faces indexed")
+current_faces = index.ntotal
 
-# Upload images
-st.header("Step 1: Upload Images to Index")
-img_files = st.file_uploader("Upload JPG images", type=["jpg", "jpeg"], accept_multiple_files=True)
+# Step 1: Upload Database Images
+st.header("Step 1: Upload Database Images")
 
-if img_files and st.button("📁 Add to Face Index"):
-    with st.spinner("Indexing faces..."):
-        count = add_images(img_files)
+if current_faces > 0:
+    st.success(f"✅ Database loaded with {current_faces} faces indexed")
+    st.session_state.database_uploaded = True
+    st.session_state.faces_indexed = True
+
+img_files = st.file_uploader("Upload JPG images for database", type=["jpg", "jpeg"], accept_multiple_files=True)
+
+if img_files and not st.session_state.database_uploaded:
+    with st.spinner("Please wait, the photos are being uploaded..."):
+        # Simulate database upload process
+        st.session_state.database_uploaded = True
+
+    st.success("✅ Database of images successfully loaded")
+
+if st.session_state.database_uploaded and img_files and not st.session_state.faces_indexed:
+    if st.button("📁 Start Face Indexing"):
+        with st.spinner("Indexing faces, please wait..."):
+            count = add_images(img_files)
+
         if count > 0:
-            st.success(f"✅ {count} faces indexed!")
-            st.rerun()  # Refresh to update sidebar
+            st.success(f"✅ Face indexing finished! {count} faces indexed")
+            st.success("🎯 Please upload reference image")
+            st.session_state.faces_indexed = True
+            st.rerun()
         else:
             st.warning("⚠️ No faces found in uploaded images.")
 
-# Upload reference
-st.header("Step 2: Upload Reference Image")
-ref_file = st.file_uploader("Reference photo", type=["jpg", "jpeg"])
+# Step 2: Upload Reference Image (only show if faces are indexed)
+if st.session_state.faces_indexed:
+    st.header("Step 2: Upload Reference Image")
 
-# Face matching with improved download
-if ref_file and st.button("🔍 Match Faces"):
-    with st.spinner("Matching faces..."):
-        zip_bytes, message = match_faces(ref_file)
+    ref_file = st.file_uploader("Reference photo", type=["jpg", "jpeg"])
 
-    if zip_bytes is None:
-        st.error(f"❌ {message}")
-    else:
-        st.success(f"✅ {message}")
+    if ref_file and not st.session_state.reference_uploaded:
+        with st.spinner("Please wait..."):
+            st.session_state.reference_uploaded = True
+        st.success("✅ Reference image uploaded successfully")
 
-        # Show file info
-        zip_size_mb = len(zip_bytes) / (1024 * 1024)
-        st.info(f"ZIP file size: {zip_size_mb:.2f} MB ({len(zip_bytes):,} bytes)")
+    # Face Matching (only show if reference is uploaded)
+    if ref_file and st.button("🔍 Match Faces"):
+        with st.spinner("Matching faces..."):
+            zip_bytes, message = match_faces(ref_file)
 
-        # Primary download button
-        st.download_button(
-            label="📦 Download Target Images",
-            data=zip_bytes,
-            file_name="target_images.zip",
-            mime="application/zip",
-            key="download_main",
-            help="Click to download matched face images"
-        )
+        if zip_bytes is None:
+            st.error(f"❌ {message}")
+        else:
+            st.success(f"✅ {message}")
 
-        # Alternative download method if the button fails
-        st.markdown("---")
-        st.markdown("**Alternative Download Method:**")
-        download_link = create_download_link(zip_bytes, "target_images.zip")
-        st.markdown(download_link, unsafe_allow_html=True)
+            # Show file info
+            zip_size_mb = len(zip_bytes) / (1024 * 1024)
+            st.info(f"ZIP file size: {zip_size_mb:.2f} MB ({len(zip_bytes):,} bytes)")
 
-        # Show some statistics
-        try:
-            with zipfile.ZipFile(BytesIO(zip_bytes), 'r') as zf:
-                file_list = zf.namelist()
-                st.success(f"ZIP contains {len(file_list)} images")
+            # Download section
+            st.markdown("---")
+            st.subheader("📦 Download Matched Images")
 
-                # Show first few filenames
-                if len(file_list) <= 10:
-                    st.write("Files in ZIP:", ", ".join(file_list))
-                else:
-                    st.write(f"Files in ZIP: {', '.join(file_list[:5])} ... and {len(file_list) - 5} more")
+            # Create download with spinner message
+            if st.button("📥 Create Download Package", type="primary"):
+                with st.spinner("Target folder being created..."):
+                    # Alternative download method using base64
+                    download_link = create_download_link(zip_bytes, "target_images.zip")
+                    st.markdown("**Download Ready:**")
+                    st.markdown(download_link, unsafe_allow_html=True)
 
-        except Exception as e:
-            st.warning(f"Could not read ZIP contents: {e}")
+                    # Show ZIP contents
+                    try:
+                        with zipfile.ZipFile(BytesIO(zip_bytes), 'r') as zf:
+                            file_list = zf.namelist()
+                            st.success(f"ZIP contains {len(file_list)} images")
+
+                            # Show filenames
+                            if len(file_list) <= 10:
+                                st.write("Files in ZIP:", ", ".join(file_list))
+                            else:
+                                st.write(f"Files in ZIP: {', '.join(file_list[:5])} ... and {len(file_list) - 5} more")
+
+                    except Exception as e:
+                        st.warning(f"Could not read ZIP contents: {e}")
+
+# Reset Workflow Button (always at bottom)
+st.markdown("---")
+st.subheader("🔄 Reset Workflow")
+
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.write("Remove all face indexes and database images (keeps model loaded)")
+with col2:
+    if st.button("🗑️ Reset Workflow", type="secondary"):
+        with st.spinner("Resetting workflow..."):
+            if reset_workflow():
+                # Reset session state
+                st.session_state.database_uploaded = False
+                st.session_state.faces_indexed = False
+                st.session_state.reference_uploaded = False
+                st.success("✅ Workflow reset successfully!")
+                st.rerun()
+            else:
+                st.error("❌ Failed to reset workflow")
 
 # Footer
 st.markdown("---")
