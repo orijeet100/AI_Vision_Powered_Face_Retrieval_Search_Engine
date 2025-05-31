@@ -28,3 +28,7 @@ async def reference_face(session_id: str, reference: UploadFile = File(...)):
 
     return FileResponse(zip_path, filename="target_photos.zip")
 
+
+@app.get("/ping")
+def ping():
+    return {"status": "FastAPI backend is alive"}

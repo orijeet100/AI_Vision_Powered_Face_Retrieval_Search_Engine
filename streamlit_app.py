@@ -5,6 +5,17 @@ import zipfile
 
 API_BASE = "http://localhost:8000"  # replace with your Render URL
 
+# ───── Health Check ─────
+try:
+    res = requests.get(f"{API_BASE}/ping", timeout=5)
+    if res.status_code == 200:
+        st.success("✅ FastAPI backend is running.")
+    else:
+        st.warning("⚠️ FastAPI backend responded, but not healthy.")
+except Exception as e:
+    st.error(f"❌ Cannot reach FastAPI backend at {API_BASE}")
+    st.stop()
+
 st.title("🔍 Face Matching App")
 
 
