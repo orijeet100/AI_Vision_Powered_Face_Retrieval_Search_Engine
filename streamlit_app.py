@@ -144,7 +144,46 @@ def _save_index(index, meta):
         pickle.dump(meta, f)
 
 
-# ───── Reset workflow function ───────────────────────────────────────────
+# ───── Session cleanup function ─────────────────────────────────────────
+import atexit
+import signal
+import sys
+
+
+def cleanup_on_exit():
+    """Clean up database files when session ends"""
+    try:
+        # Remove index and metadata files
+        if INDEX_FILE.exists():
+            INDEX_FILE.unlink()
+        if META_FILE.exists():
+            META_FILE.unlink()
+
+        # Clear image directories
+        if IMG_DIR.exists():
+            shutil.rmtree(IMG_DIR)
+        if TARGET_DIR.exists():
+            shutil.rmtree(TARGET_DIR)
+
+        print("✅ Session cleanup completed - database files removed")
+    except Exception as e:
+        print(f"⚠️ Cleanup error: {e}")
+
+
+# Register cleanup functions for different termination scenarios
+atexit.register(cleanup_on_exit)
+
+
+# Handle signal termination (Cloud Run instance shutdown)
+def signal_handler(signum, frame):
+    cleanup_on_exit()
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
+
 def reset_workflow():
     """Reset all data while keeping the model loaded"""
     try:
@@ -298,7 +337,7 @@ def create_download_link(zip_bytes: bytes, filename: str = "target_images.zip") 
     return f'<a href="data:application/zip;base64,{b64}" download="{filename}">📦 Click here to download {filename}</a>'
 
 
-# ───── Session State Management ──────────────────────────────────────────
+# ───── Session State Management with Auto-cleanup ──────────────────────
 if 'database_uploaded' not in st.session_state:
     st.session_state.database_uploaded = False
 if 'faces_indexed' not in st.session_state:
@@ -309,8 +348,40 @@ if 'download_ready' not in st.session_state:
     st.session_state.download_ready = False
 if 'zip_data' not in st.session_state:
     st.session_state.zip_data = None
+if 'session_id' not in st.session_state:
+    import uuid
 
-# ───── UI ────────────────────────────────────────────────────────────────
+    st.session_state.session_id = str(uuid.uuid4())
+    # Clean up any existing files when new session starts
+    cleanup_on_exit()
+
+# Track active session for cleanup
+if 'last_activity' not in st.session_state:
+    st.session_state.last_activity = None
+
+# Update activity timestamp
+import time
+
+st.session_state.last_activity = time.time()
+
+
+# ───── Periodic cleanup check ──────────────────────────────────────────
+def check_and_cleanup_old_sessions():
+    """Clean up if session has been inactive for too long"""
+    if st.session_state.last_activity:
+        inactive_time = time.time() - st.session_state.last_activity
+        # Clean up after 30 minutes of inactivity
+        if inactive_time > 1800:  # 30 minutes
+            cleanup_on_exit()
+            # Reset session state
+            for key in ['database_uploaded', 'faces_indexed', 'reference_uploaded', 'download_ready']:
+                if key in st.session_state:
+                    st.session_state[key] = False
+            st.session_state.zip_data = None
+
+
+# Run cleanup check
+check_and_cleanup_old_sessions()
 st.title("🔍 Face Retrieval System")
 
 # Check current database status
@@ -318,7 +389,7 @@ index = _load_index()
 meta = _load_meta()
 current_faces = index.ntotal
 
-# Reset session state based on actual database status
+# Reset session state if no database exists
 if current_faces == 0:
     st.session_state.database_uploaded = False
     st.session_state.faces_indexed = False
@@ -328,13 +399,6 @@ if current_faces == 0:
 
 # Step 1: Upload Database Images
 st.header("Step 1: Upload Database Images")
-
-if current_faces > 0 and not st.session_state.faces_indexed:
-    st.success(f"✅ Database loaded with {current_faces} faces indexed")
-    st.session_state.database_uploaded = True
-    st.session_state.faces_indexed = True
-elif current_faces > 0:
-    st.success(f"✅ Database loaded with {current_faces} faces indexed")
 
 img_files = st.file_uploader("Upload JPG images for database", type=["jpg", "jpeg"], accept_multiple_files=True,
                              key="database_upload")
@@ -438,7 +502,30 @@ with col2:
             else:
                 st.error("❌ Failed to reset workflow")
 
-# Footer
+# Footer with cleanup detection
 st.markdown("---")
 st.markdown(
     "💡 **Tips**: Use clear, well-lit photos for better face detection. The system works best with frontal face images.")
+
+# Add JavaScript for browser tab close detection
+st.markdown("""
+<script>
+window.addEventListener('beforeunload', function (e) {
+    // Send cleanup signal to server when tab/browser is closing
+    fetch(window.location.origin + '/cleanup', {
+        method: 'POST',
+        keepalive: true,
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({session_id: '%s'})
+    });
+});
+
+// Also cleanup on page visibility change (tab switch, minimize)
+document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'hidden') {
+        // Optional: cleanup on tab hide
+        console.log('Tab hidden - potential cleanup point');
+    }
+});
+</script>
+""" % st.session_state.session_id, unsafe_allow_html=True)
