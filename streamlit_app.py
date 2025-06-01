@@ -305,6 +305,10 @@ if 'faces_indexed' not in st.session_state:
     st.session_state.faces_indexed = False
 if 'reference_uploaded' not in st.session_state:
     st.session_state.reference_uploaded = False
+if 'download_ready' not in st.session_state:
+    st.session_state.download_ready = False
+if 'zip_data' not in st.session_state:
+    st.session_state.zip_data = None
 
 # ───── UI ────────────────────────────────────────────────────────────────
 st.title("🔍 Face Retrieval System")
@@ -314,15 +318,26 @@ index = _load_index()
 meta = _load_meta()
 current_faces = index.ntotal
 
+# Reset session state based on actual database status
+if current_faces == 0:
+    st.session_state.database_uploaded = False
+    st.session_state.faces_indexed = False
+    st.session_state.reference_uploaded = False
+    st.session_state.download_ready = False
+    st.session_state.zip_data = None
+
 # Step 1: Upload Database Images
 st.header("Step 1: Upload Database Images")
 
-if current_faces > 0:
+if current_faces > 0 and not st.session_state.faces_indexed:
     st.success(f"✅ Database loaded with {current_faces} faces indexed")
     st.session_state.database_uploaded = True
     st.session_state.faces_indexed = True
+elif current_faces > 0:
+    st.success(f"✅ Database loaded with {current_faces} faces indexed")
 
-img_files = st.file_uploader("Upload JPG images for database", type=["jpg", "jpeg"], accept_multiple_files=True)
+img_files = st.file_uploader("Upload JPG images for database", type=["jpg", "jpeg"], accept_multiple_files=True,
+                             key="database_upload")
 
 if img_files and not st.session_state.database_uploaded:
     with st.spinner("Please wait, the photos are being uploaded..."):
@@ -348,7 +363,7 @@ if st.session_state.database_uploaded and img_files and not st.session_state.fac
 if st.session_state.faces_indexed:
     st.header("Step 2: Upload Reference Image")
 
-    ref_file = st.file_uploader("Reference photo", type=["jpg", "jpeg"])
+    ref_file = st.file_uploader("Reference photo", type=["jpg", "jpeg"], key="reference_upload")
 
     if ref_file and not st.session_state.reference_uploaded:
         with st.spinner("Please wait..."):
@@ -365,36 +380,41 @@ if st.session_state.faces_indexed:
         else:
             st.success(f"✅ {message}")
 
+            # Store ZIP data in session state
+            st.session_state.zip_data = zip_bytes
+            st.session_state.download_ready = True
+
             # Show file info
             zip_size_mb = len(zip_bytes) / (1024 * 1024)
             st.info(f"ZIP file size: {zip_size_mb:.2f} MB ({len(zip_bytes):,} bytes)")
 
-            # Download section
-            st.markdown("---")
-            st.subheader("📦 Download Matched Images")
+# Download section (show if download is ready)
+if st.session_state.download_ready and st.session_state.zip_data:
+    st.markdown("---")
+    st.subheader("📦 Download Matched Images")
 
-            # Create download with spinner message
-            if st.button("📥 Create Download Package", type="primary"):
-                with st.spinner("Target folder being created..."):
-                    # Alternative download method using base64
-                    download_link = create_download_link(zip_bytes, "target_images.zip")
-                    st.markdown("**Download Ready:**")
-                    st.markdown(download_link, unsafe_allow_html=True)
+    # Create download with spinner message
+    if st.button("📥 Create Download Package", type="primary", key="create_download"):
+        with st.spinner("Target folder being created..."):
+            # Alternative download method using base64
+            download_link = create_download_link(st.session_state.zip_data, "target_images.zip")
+            st.markdown("**Download Ready:**")
+            st.markdown(download_link, unsafe_allow_html=True)
 
-                    # Show ZIP contents
-                    try:
-                        with zipfile.ZipFile(BytesIO(zip_bytes), 'r') as zf:
-                            file_list = zf.namelist()
-                            st.success(f"ZIP contains {len(file_list)} images")
+            # Show ZIP contents
+            try:
+                with zipfile.ZipFile(BytesIO(st.session_state.zip_data), 'r') as zf:
+                    file_list = zf.namelist()
+                    st.success(f"ZIP contains {len(file_list)} images")
 
-                            # Show filenames
-                            if len(file_list) <= 10:
-                                st.write("Files in ZIP:", ", ".join(file_list))
-                            else:
-                                st.write(f"Files in ZIP: {', '.join(file_list[:5])} ... and {len(file_list) - 5} more")
+                    # Show filenames
+                    if len(file_list) <= 10:
+                        st.write("Files in ZIP:", ", ".join(file_list))
+                    else:
+                        st.write(f"Files in ZIP: {', '.join(file_list[:5])} ... and {len(file_list) - 5} more")
 
-                    except Exception as e:
-                        st.warning(f"Could not read ZIP contents: {e}")
+            except Exception as e:
+                st.warning(f"Could not read ZIP contents: {e}")
 
 # Reset Workflow Button (always at bottom)
 st.markdown("---")
@@ -404,13 +424,15 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.write("Remove all face indexes and database images (keeps model loaded)")
 with col2:
-    if st.button("🗑️ Reset Workflow", type="secondary"):
+    if st.button("🗑️ Reset Workflow", type="secondary", key="reset_workflow"):
         with st.spinner("Resetting workflow..."):
             if reset_workflow():
                 # Reset session state
                 st.session_state.database_uploaded = False
                 st.session_state.faces_indexed = False
                 st.session_state.reference_uploaded = False
+                st.session_state.download_ready = False
+                st.session_state.zip_data = None
                 st.success("✅ Workflow reset successfully!")
                 st.rerun()
             else:
