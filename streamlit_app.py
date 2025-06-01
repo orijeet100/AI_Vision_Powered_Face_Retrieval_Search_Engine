@@ -104,18 +104,7 @@ from typing import List, Tuple, Optional
 from insightface.app import FaceAnalysis
 
 # ───── Setup ─────────────────────────────────────────────────────────────
-DATABASE_DIR = Path("database")
-DATA_DIR = Path("data")
-IMG_DIR = DATA_DIR / "user_photos"
-TARGET_DIR = Path("target_photos")
-INDEX_FILE = DATA_DIR / "faces.faiss"
-META_FILE = DATA_DIR / "faces.pkl"
 DIST_THR = 0.7
-
-# ───── Ensure dirs ───────────────────────────────────────────────────────
-DATA_DIR.mkdir(exist_ok=True)
-IMG_DIR.mkdir(exist_ok=True)
-TARGET_DIR.mkdir(exist_ok=True)
 
 
 # ───── Model Load ────────────────────────────────────────────────────────
@@ -129,91 +118,60 @@ def load_model():
 face_app = load_model()
 
 
-# ───── Index helpers ─────────────────────────────────────────────────────
-def _load_index():
-    return faiss.read_index(str(INDEX_FILE)) if INDEX_FILE.exists() else faiss.IndexFlatIP(512)
+# ───── In-memory storage helpers using session state ────────────────────
+def _get_index():
+    """Get or create FAISS index in session state"""
+    if st.session_state.face_index is None:
+        st.session_state.face_index = faiss.IndexFlatIP(512)
+    return st.session_state.face_index
 
 
-def _load_meta():
-    return pickle.load(open(META_FILE, "rb")) if META_FILE.exists() else []
+def get_current_face_count():
+    """Get current face count from session state"""
+    if st.session_state.face_index is None:
+        return 0
+    return st.session_state.face_index.ntotal
 
 
-def _save_index(index, meta):
-    faiss.write_index(index, str(INDEX_FILE))
-    with open(META_FILE, "wb") as f:
-        pickle.dump(meta, f)
+def _save_face_data(new_embeddings, new_image_data):
+    """Add new face data to session state storage"""
+    print(f"DEBUG: _save_face_data called with {len(new_embeddings)} embeddings")
 
+    # Add embeddings to FAISS index
+    if new_embeddings:
+        # Convert to proper numpy array format
+        embeddings_array = np.vstack(new_embeddings).astype(np.float32)
+        faiss.normalize_L2(embeddings_array)
 
-# ───── Session cleanup function ─────────────────────────────────────────
-import atexit
-import signal
-import sys
+        print(f"DEBUG: embeddings_array shape: {embeddings_array.shape}")
 
+        # Get or create index and update session state
+        face_index = _get_index()
+        print(f"DEBUG: face_index before add: {face_index.ntotal}")
 
-def cleanup_on_exit():
-    """Clean up database files when session ends"""
-    try:
-        # Remove index and metadata files
-        if INDEX_FILE.exists():
-            INDEX_FILE.unlink()
-        if META_FILE.exists():
-            META_FILE.unlink()
+        # Add embeddings to FAISS index
+        face_index.add(embeddings_array)
+        print(f"DEBUG: face_index after add: {face_index.ntotal}")
 
-        # Clear image directories
-        if IMG_DIR.exists():
-            shutil.rmtree(IMG_DIR)
-        if TARGET_DIR.exists():
-            shutil.rmtree(TARGET_DIR)
+        # Add to face_embeddings list in session state
+        st.session_state.face_embeddings.extend(new_embeddings)
+        print(f"DEBUG: face_embeddings length: {len(st.session_state.face_embeddings)}")
 
-        print("✅ Session cleanup completed - database files removed")
-    except Exception as e:
-        print(f"⚠️ Cleanup error: {e}")
+        # Track which image each face belongs to
+        start_img_idx = len(st.session_state.image_data)
+        for i, (img_data, face_count) in enumerate(new_image_data):
+            st.session_state.image_data.append(img_data)
+            # Map each face from this image to the image index
+            for _ in range(face_count):
+                st.session_state.face_to_image_map.append(start_img_idx + i)
 
-
-# Register cleanup functions for different termination scenarios
-atexit.register(cleanup_on_exit)
-
-
-# Handle signal termination (Cloud Run instance shutdown)
-def signal_handler(signum, frame):
-    cleanup_on_exit()
-    sys.exit(0)
-
-
-signal.signal(signal.SIGTERM, signal_handler)
-signal.signal(signal.SIGINT, signal_handler)
-
-
-def reset_workflow():
-    """Reset all data while keeping the model loaded"""
-    try:
-        # Remove index and metadata files
-        if INDEX_FILE.exists():
-            INDEX_FILE.unlink()
-        if META_FILE.exists():
-            META_FILE.unlink()
-
-        # Clear image directories
-        if IMG_DIR.exists():
-            shutil.rmtree(IMG_DIR)
-        if TARGET_DIR.exists():
-            shutil.rmtree(TARGET_DIR)
-
-        # Recreate directories
-        IMG_DIR.mkdir(exist_ok=True)
-        TARGET_DIR.mkdir(exist_ok=True)
-
-        return True
-    except Exception as e:
-        st.error(f"Error resetting workflow: {e}")
-        return False
-
+        print(
+            f"DEBUG: Final counts - FAISS: {face_index.ntotal}, embeddings: {len(st.session_state.face_embeddings)}, images: {len(st.session_state.image_data)}")
 
 # ───── Add user images ───────────────────────────────────────────────────
 def add_images(files):
-    index = _load_index()
-    meta = _load_meta()
-    new_vecs, new_paths = [], []
+    new_embeddings = []
+    new_image_data = []
 
     for file in files:
         file.seek(0)  # Reset file pointer
@@ -225,23 +183,21 @@ def add_images(files):
         if not faces:
             continue
 
-        # Save original file bytes instead of re-encoding
-        dst_path = IMG_DIR / file.name
-        with open(dst_path, 'wb') as f:
-            file.seek(0)  # Reset pointer again
-            f.write(file.read())  # Save original bytes
+        # Store original image bytes with filename
+        file.seek(0)  # Reset pointer again
+        original_bytes = file.read()
+        face_count = len(faces)
+        new_image_data.append(((file.name, original_bytes), face_count))
 
+        # Extract face embeddings
         for face in faces:
-            new_vecs.append(face["embedding"])
-            new_paths.append(str(dst_path))
+            new_embeddings.append(face["embedding"])
 
-    if new_vecs:
-        vecs = np.vstack(new_vecs).astype("float32")
-        faiss.normalize_L2(vecs)
-        index.add(vecs)
-        meta.extend(new_paths)
-        _save_index(index, meta)
-        return len(new_vecs)
+    if new_embeddings:
+        _save_face_data(new_embeddings, new_image_data)
+        # Debug: verify data was saved
+        final_count = get_current_face_count()
+        return len(new_embeddings)
     return 0
 
 
@@ -251,15 +207,13 @@ def match_faces(reference_file) -> Tuple[Optional[bytes], str]:
     Returns (zip_bytes, message) where zip_bytes is None on error
     """
     try:
-        # Clean up target directory
-        if TARGET_DIR.exists():
-            shutil.rmtree(TARGET_DIR)
-        TARGET_DIR.mkdir(exist_ok=True)
+        current_count = get_current_face_count()
+        print(f"DEBUG: match_faces - current face count: {current_count}")
+        print(f"DEBUG: face_index is None: {st.session_state.face_index is None}")
+        if st.session_state.face_index:
+            print(f"DEBUG: face_index.ntotal: {st.session_state.face_index.ntotal}")
 
-        index = _load_index()
-        meta = _load_meta()
-
-        if index.ntotal == 0:
+        if current_count == 0:
             return None, "No faces in database. Please add images first."
 
         # Process reference image
@@ -277,49 +231,37 @@ def match_faces(reference_file) -> Tuple[Optional[bytes], str]:
         # Search for matches
         q = faces[0]["embedding"].astype("float32").reshape(1, -1)
         faiss.normalize_L2(q)
-        D, I = index.search(q, min(50, index.ntotal))
+        D, I = st.session_state.face_index.search(q, min(50, st.session_state.face_index.ntotal))
 
-        # Collect matches
-        matched_images = []
-        results = []
+        # Collect unique matched images
+        matched_images = {}  # Use dict to avoid duplicates by filename
 
         for d, i in zip(D[0], I[0]):
-            if i == -1:  # Invalid index
+            if i == -1 or i >= len(st.session_state.face_to_image_map):  # Invalid index
                 continue
 
             similarity = float(d)
             distance = 1 - similarity / 2
 
-            if distance < DIST_THR and i < len(meta):
-                source_path = meta[i]
-                if not os.path.exists(source_path):
-                    continue
-
-                # Read source image
-                try:
-                    with open(source_path, 'rb') as f:
-                        img_data = f.read()
-
-                    fname = Path(source_path).name
-                    matched_images.append((fname, img_data))
-                    results.append((source_path, similarity))
-
-                except Exception as e:
-                    st.warning(f"Could not read {source_path}: {e}")
-                    continue
+            if distance < DIST_THR:
+                img_idx = st.session_state.face_to_image_map[i]
+                if img_idx < len(st.session_state.image_data):
+                    filename, img_bytes = st.session_state.image_data[img_idx]
+                    # Keep the best similarity score for each image
+                    if filename not in matched_images or similarity > matched_images[filename][1]:
+                        matched_images[filename] = (img_bytes, similarity)
 
         if not matched_images:
             return None, f"No faces matched with threshold {DIST_THR}"
 
-        # Create ZIP file using temporary file for better reliability
-        with tempfile.NamedTemporaryFile() as temp_file:
-            with zipfile.ZipFile(temp_file, "w", zipfile.ZIP_STORED) as zipf:  # No compression for images
-                for fname, img_data in matched_images:
-                    zipf.writestr(fname, img_data)
+        # Create ZIP file in memory
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_STORED) as zipf:
+            for filename, (img_bytes, similarity) in matched_images.items():
+                zipf.writestr(filename, img_bytes)
 
-            # Read the complete ZIP file
-            temp_file.seek(0)
-            zip_bytes = temp_file.read()
+        zip_buffer.seek(0)
+        zip_bytes = zip_buffer.read()
 
         if len(zip_bytes) == 0:
             return None, "Generated ZIP file is empty"
@@ -337,7 +279,7 @@ def create_download_link(zip_bytes: bytes, filename: str = "target_images.zip") 
     return f'<a href="data:application/zip;base64,{b64}" download="{filename}">📦 Click here to download {filename}</a>'
 
 
-# ───── Session State Management with Auto-cleanup ──────────────────────
+# ───── Session State Management for face data ────────────────────────────
 if 'database_uploaded' not in st.session_state:
     st.session_state.database_uploaded = False
 if 'faces_indexed' not in st.session_state:
@@ -348,66 +290,49 @@ if 'download_ready' not in st.session_state:
     st.session_state.download_ready = False
 if 'zip_data' not in st.session_state:
     st.session_state.zip_data = None
-if 'session_id' not in st.session_state:
-    import uuid
 
-    st.session_state.session_id = str(uuid.uuid4())
-    # Clean up any existing files when new session starts
-    cleanup_on_exit()
+# Initialize face data in session state
+if 'face_index' not in st.session_state:
+    st.session_state.face_index = None
+if 'face_embeddings' not in st.session_state:
+    st.session_state.face_embeddings = []
+if 'image_data' not in st.session_state:
+    st.session_state.image_data = []
+if 'face_to_image_map' not in st.session_state:
+    st.session_state.face_to_image_map = []
 
-# Track active session for cleanup
-if 'last_activity' not in st.session_state:
-    st.session_state.last_activity = None
-
-# Update activity timestamp
-import time
-
-st.session_state.last_activity = time.time()
-
-
-# ───── Periodic cleanup check ──────────────────────────────────────────
-def check_and_cleanup_old_sessions():
-    """Clean up if session has been inactive for too long"""
-    if st.session_state.last_activity:
-        inactive_time = time.time() - st.session_state.last_activity
-        # Clean up after 30 minutes of inactivity
-        if inactive_time > 1800:  # 30 minutes
-            cleanup_on_exit()
-            # Reset session state
-            for key in ['database_uploaded', 'faces_indexed', 'reference_uploaded', 'download_ready']:
-                if key in st.session_state:
-                    st.session_state[key] = False
-            st.session_state.zip_data = None
-
-
-# Run cleanup check
-check_and_cleanup_old_sessions()
+# ───── UI ────────────────────────────────────────────────────────────────
 st.title("🔍 Face Retrieval System")
 
 # Check current database status
-index = _load_index()
-meta = _load_meta()
-current_faces = index.ntotal
+current_faces = get_current_face_count()
 
-# Reset session state if no database exists
+# Only show database status if faces exist, and only once per session
+if current_faces > 0 and 'initial_load_shown' not in st.session_state:
+    st.session_state.initial_load_shown = True
+    st.session_state.database_uploaded = True
+    st.session_state.faces_indexed = True
+
+# Reset session state based on actual database status
 if current_faces == 0:
     st.session_state.database_uploaded = False
     st.session_state.faces_indexed = False
     st.session_state.reference_uploaded = False
     st.session_state.download_ready = False
     st.session_state.zip_data = None
+    if 'initial_load_shown' in st.session_state:
+        del st.session_state.initial_load_shown
 
 # Step 1: Upload Database Images
 st.header("Step 1: Upload Database Images")
+
 
 img_files = st.file_uploader("Upload JPG images for database", type=["jpg", "jpeg"], accept_multiple_files=True,
                              key="database_upload")
 
 if img_files and not st.session_state.database_uploaded:
-    with st.spinner("Please wait, the photos are being uploaded..."):
         # Simulate database upload process
-        st.session_state.database_uploaded = True
-
+    st.session_state.database_uploaded = True
     st.success("✅ Database of images successfully loaded")
 
 if st.session_state.database_uploaded and img_files and not st.session_state.faces_indexed:
@@ -419,7 +344,8 @@ if st.session_state.database_uploaded and img_files and not st.session_state.fac
             st.success(f"✅ Face indexing finished! {count} faces indexed")
             st.success("🎯 Please upload reference image")
             st.session_state.faces_indexed = True
-            st.rerun()
+            # Force refresh of face count
+            # st.rerun()
         else:
             st.warning("⚠️ No faces found in uploaded images.")
 
@@ -430,8 +356,7 @@ if st.session_state.faces_indexed:
     ref_file = st.file_uploader("Reference photo", type=["jpg", "jpeg"], key="reference_upload")
 
     if ref_file and not st.session_state.reference_uploaded:
-        with st.spinner("Please wait..."):
-            st.session_state.reference_uploaded = True
+        st.session_state.reference_uploaded = True
         st.success("✅ Reference image uploaded successfully")
 
     # Face Matching (only show if reference is uploaded)
@@ -480,52 +405,12 @@ if st.session_state.download_ready and st.session_state.zip_data:
             except Exception as e:
                 st.warning(f"Could not read ZIP contents: {e}")
 
-# Reset Workflow Button (always at bottom)
+
+# Reset Workflow (simple refresh instruction)
 st.markdown("---")
-st.subheader("🔄 Reset Workflow")
+st.info("🔄 **Reset Workflow**: Refresh this page to start over")
 
-col1, col2 = st.columns([3, 1])
-with col1:
-    st.write("Remove all face indexes and database images (keeps model loaded)")
-with col2:
-    if st.button("🗑️ Reset Workflow", type="secondary", key="reset_workflow"):
-        with st.spinner("Resetting workflow..."):
-            if reset_workflow():
-                # Reset session state
-                st.session_state.database_uploaded = False
-                st.session_state.faces_indexed = False
-                st.session_state.reference_uploaded = False
-                st.session_state.download_ready = False
-                st.session_state.zip_data = None
-                st.success("✅ Workflow reset successfully!")
-                st.rerun()
-            else:
-                st.error("❌ Failed to reset workflow")
-
-# Footer with cleanup detection
+# Footer
 st.markdown("---")
 st.markdown(
     "💡 **Tips**: Use clear, well-lit photos for better face detection. The system works best with frontal face images.")
-
-# Add JavaScript for browser tab close detection
-st.markdown("""
-<script>
-window.addEventListener('beforeunload', function (e) {
-    // Send cleanup signal to server when tab/browser is closing
-    fetch(window.location.origin + '/cleanup', {
-        method: 'POST',
-        keepalive: true,
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({session_id: '%s'})
-    });
-});
-
-// Also cleanup on page visibility change (tab switch, minimize)
-document.addEventListener('visibilitychange', function() {
-    if (document.visibilityState === 'hidden') {
-        // Optional: cleanup on tab hide
-        console.log('Tab hidden - potential cleanup point');
-    }
-});
-</script>
-""" % st.session_state.session_id, unsafe_allow_html=True)
