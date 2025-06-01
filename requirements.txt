@@ -19,3 +19,5 @@ uvicorn
 python-multipart
 streamlit
 requests
+rawpy
+pillow_heif
