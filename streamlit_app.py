@@ -279,6 +279,32 @@ def create_download_link(zip_bytes: bytes, filename: str = "target_images.zip") 
     return f'<a href="data:application/zip;base64,{b64}" download="{filename}">📦 Click here to download {filename}</a>'
 
 
+def create_mobile_friendly_download(zip_bytes: bytes, filename: str = "target_images.zip"):
+    """Create mobile-friendly download options"""
+    # Method 1: Streamlit's native download button (works best on mobile)
+    st.download_button(
+        label="📱 Download for Mobile",
+        data=zip_bytes,
+        file_name=filename,
+        mime="application/zip",
+        key="mobile_download",
+        help="Works best on mobile devices"
+    )
+
+    # Method 2: Base64 link (for desktop)
+    b64 = base64.b64encode(zip_bytes).decode()
+    download_link = f'<a href="data:application/zip;base64,{b64}" download="{filename}">💻 Desktop Download Link</a>'
+    st.markdown(download_link, unsafe_allow_html=True)
+
+    # Method 3: Instructions for mobile users
+    st.info("""
+    📱 **Mobile Download Tips:**
+    - Use the "Download for Mobile" button above
+    - If that doesn't work, try opening this page in Chrome/Firefox instead of Safari
+    - On iPhone: Long-press the download link → "Download Linked File"
+    """)
+
+
 # ───── Session State Management for face data ────────────────────────────
 if 'database_uploaded' not in st.session_state:
     st.session_state.database_uploaded = False
@@ -382,29 +408,44 @@ if st.session_state.download_ready and st.session_state.zip_data:
     st.markdown("---")
     st.subheader("📦 Download Matched Images")
 
-    # Create download with spinner message
-    if st.button("📥 Create Download Package", type="primary", key="create_download"):
-        with st.spinner("Target folder being created..."):
-            # Alternative download method using base64
-            download_link = create_download_link(st.session_state.zip_data, "target_images.zip")
-            st.markdown("**Download Ready:**")
-            st.markdown(download_link, unsafe_allow_html=True)
+    # Mobile-friendly download button
+    st.download_button(
+        label="📱 Download Images",
+        data=st.session_state.zip_data,
+        file_name="target_images.zip",
+        mime="application/zip",
+        key="mobile_download",
+        type="primary"
+    )
 
-            # Show ZIP contents
-            try:
-                with zipfile.ZipFile(BytesIO(st.session_state.zip_data), 'r') as zf:
-                    file_list = zf.namelist()
-                    st.success(f"ZIP contains {len(file_list)} images")
+    # Alternative desktop download link
+    b64 = base64.b64encode(st.session_state.zip_data).decode()
+    download_link = f'<a href="data:application/zip;base64,{b64}" download="target_images.zip">💻 Alternative Download Link</a>'
+    st.markdown(download_link, unsafe_allow_html=True)
 
-                    # Show filenames
-                    if len(file_list) <= 10:
-                        st.write("Files in ZIP:", ", ".join(file_list))
-                    else:
-                        st.write(f"Files in ZIP: {', '.join(file_list[:5])} ... and {len(file_list) - 5} more")
+    # Mobile download tips
+    st.info("""
+    📱 **Mobile Download Tips:**
+    - Use the "Download Images" button above (works best on mobile)
+    - If button doesn't work, try the alternative link
+    - On iPhone: Long-press download link → "Download Linked File"
+    - Consider using Chrome/Firefox instead of Safari for better download support
+    """)
 
-            except Exception as e:
-                st.warning(f"Could not read ZIP contents: {e}")
+    # Show ZIP contents
+    try:
+        with zipfile.ZipFile(BytesIO(st.session_state.zip_data), 'r') as zf:
+            file_list = zf.namelist()
+            st.success(f"ZIP contains {len(file_list)} images")
 
+            # Show filenames
+            if len(file_list) <= 10:
+                st.write("Files in ZIP:", ", ".join(file_list))
+            else:
+                st.write(f"Files in ZIP: {', '.join(file_list[:5])} ... and {len(file_list) - 5} more")
+
+    except Exception as e:
+        st.warning(f"Could not read ZIP contents: {e}")
 
 # Reset Workflow (simple refresh instruction)
 st.markdown("---")
