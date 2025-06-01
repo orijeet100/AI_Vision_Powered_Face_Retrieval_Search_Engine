@@ -80,10 +80,6 @@
 
 
 # streamlit_app.py
-# AIzaSyB47PYsmVGeUob_peD69Chtu_NnurmxZV0
-
-
-# streamlit_app.py
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # IMPORTANT: st.set_page_config() MUST be the first Streamlit command
@@ -262,7 +258,7 @@ def get_drive_images_list(folder_id):
 
         params = {
             'q': full_query,
-            'key': 'AIzaSyB47PYsmVGeUob_peD69Chtu_NnurmxZV0',  # Replace with your own API key
+            'key': 'GOOGLE_API_KEY',  # Replace with your own API key
             'fields': 'files(id,name,mimeType,size)',
             'pageSize': 1000  # Increased to handle more images
         }
