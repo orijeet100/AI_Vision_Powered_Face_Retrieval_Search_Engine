@@ -255,10 +255,10 @@ def get_drive_images_list(folder_id):
         # Create comprehensive query for all image formats
         image_query = create_drive_query()
         full_query = f"'{folder_id}' in parents and ({image_query})"
-
+        key=os.getenv("DRIVE_API_KEY")
         params = {
             'q': full_query,
-            'key': 'GOOGLE_API_KEY',  # Replace with your own API key
+            'key': key,  # Replace with your own API key
             'fields': 'files(id,name,mimeType,size)',
             'pageSize': 1000  # Increased to handle more images
         }
