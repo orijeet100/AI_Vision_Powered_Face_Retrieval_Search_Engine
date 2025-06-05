@@ -107,9 +107,12 @@ from insightface.app import FaceAnalysis
 from PIL import Image, ImageOps
 import rawpy  # For RAW image formats
 import pillow_heif  # For HEIC/HEIF formats
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ───── Setup ─────────────────────────────────────────────────────────────
-DIST_THR = 0.8
+DIST_THR = 0.7
 
 # Register HEIF opener for PIL
 pillow_heif.register_heif_opener()
@@ -247,37 +250,108 @@ def check_drive_folder_permissions(folder_id):
         return False
 
 
-def get_drive_images_list(folder_id):
-    """Get list of image files from Google Drive folder"""
-    try:
-        api_url = f"https://www.googleapis.com/drive/v3/files"
+def get_all_folders_recursive(folder_id, api_key, visited=None):
+    """Recursively get all folder IDs including nested folders"""
+    if visited is None:
+        visited = set()
 
-        # Create comprehensive query for all image formats
-        image_query = create_drive_query()
-        full_query = f"'{folder_id}' in parents and ({image_query})"
-        key=os.getenv("DRIVE_API_KEY")
+    if folder_id in visited:
+        return []  # Avoid infinite loops
+
+    visited.add(folder_id)
+    all_folders = [folder_id]
+
+    try:
+        # Get all folders within this folder
+        api_url = f"https://www.googleapis.com/drive/v3/files"
         params = {
-            'q': full_query,
-            'key': key,  # Replace with your own API key
-            'fields': 'files(id,name,mimeType,size)',
-            'pageSize': 1000  # Increased to handle more images
+            'q': f"'{folder_id}' in parents and mimeType='application/vnd.google-apps.folder'",
+            'key': api_key,
+            'fields': 'files(id,name)',
+            'pageSize': 1000
         }
 
         response = requests.get(api_url, params=params, timeout=30)
         if response.status_code == 200:
             data = response.json()
-            files = data.get('files', [])
+            folders = data.get('files', [])
 
-            # Filter by extension as additional check
-            valid_files = []
-            for file in files:
-                file_ext = Path(file['name']).suffix.lower().lstrip('.')
-                if file_ext in SUPPORTED_FORMATS:
-                    valid_files.append(file)
+            # Recursively get all nested folders
+            for folder in folders:
+                nested_folders = get_all_folders_recursive(folder['id'], api_key, visited)
+                all_folders.extend(nested_folders)
 
-            return valid_files
-        else:
+        return all_folders
+    except Exception as e:
+        st.warning(f"Error getting nested folders: {e}")
+        return all_folders
+
+def get_drive_images_list(folder_id):
+    """Get list of image files from Google Drive folder and all nested folders"""
+    try:
+        # Get API key from environment variable
+        api_key = os.getenv('DRIVE_API_KEY')
+        if not api_key:
+            st.error("Google Drive API key not configured. Please contact administrator.")
             return None
+
+        # Get all folder IDs (including nested ones)
+        st.info("🔍 Scanning folder structure...")
+        all_folder_ids = get_all_folders_recursive(folder_id, api_key)
+
+        if len(all_folder_ids) > 1:
+            st.success(f"📁 Found {len(all_folder_ids)} folders to scan (including subfolders)")
+
+        api_url = f"https://www.googleapis.com/drive/v3/files"
+        all_valid_files = []
+
+        # Create comprehensive query for all image formats
+        image_query = create_drive_query()
+
+        # Search in all folders (including nested ones)
+        for i, current_folder_id in enumerate(all_folder_ids):
+            try:
+                full_query = f"'{current_folder_id}' in parents and ({image_query})"
+
+                params = {
+                    'q': full_query,
+                    'key': api_key,
+                    'fields': 'files(id,name,mimeType,size,parents)',
+                    'pageSize': 1000
+                }
+
+                response = requests.get(api_url, params=params, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    files = data.get('files', [])
+
+                    # Filter by extension as additional check
+                    for file in files:
+                        file_ext = Path(file['name']).suffix.lower().lstrip('.')
+                        if file_ext in SUPPORTED_FORMATS:
+                            all_valid_files.append(file)
+
+                # Show progress for multiple folders
+                if len(all_folder_ids) > 1:
+                    progress = (i + 1) / len(all_folder_ids)
+                    st.progress(progress, text=f"Scanning folder {i + 1}/{len(all_folder_ids)}")
+
+            except Exception as e:
+                st.warning(f"Error scanning folder {current_folder_id}: {e}")
+                continue
+
+        # Remove duplicates (in case same file appears in multiple searches)
+        unique_files = {}
+        for file in all_valid_files:
+            unique_files[file['id']] = file
+
+        final_files = list(unique_files.values())
+
+        if len(all_folder_ids) > 1:
+            st.empty()  # Clear progress bar
+
+        return final_files
+
     except Exception as e:
         st.error(f"Error accessing Drive API: {e}")
         return None
