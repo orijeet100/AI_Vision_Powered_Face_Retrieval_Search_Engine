@@ -3,7 +3,7 @@
 > **Find similar faces across thousands of images with state-of-the-art AI**
 
 <a href="[https://your-destination-link.com]([https://www.linkedin.com/feed/update/urn:li:ugcPost:7345461036101124096](https://drive.google.com/file/d/1-TY0BIdhcJ4-12MzEsOA6H2ndnBILZz0/view?usp=drive_link)">
-  <img src="face_retrieval_demo" alt="Thumbnail" width="70%">
+  <img src="face_retrieval_thumbnail.png" alt="Thumbnail" width="70%">
 </a>
 
 [View this video post](https://drive.google.com/file/d/1-TY0BIdhcJ4-12MzEsOA6H2ndnBILZz0/view?usp=drive_link)
