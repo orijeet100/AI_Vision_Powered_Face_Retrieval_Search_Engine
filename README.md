@@ -2,6 +2,12 @@
 
 > **Find similar faces across thousands of images with state-of-the-art AI**
 
+<a href="[https://your-destination-link.com]([https://www.linkedin.com/feed/update/urn:li:ugcPost:7345461036101124096](https://drive.google.com/file/d/1-TY0BIdhcJ4-12MzEsOA6H2ndnBILZz0/view?usp=drive_link)">
+  <img src="face_retrieval_demo" alt="Thumbnail" width="70%">
+</a>
+
+[View this video post](https://drive.google.com/file/d/1-TY0BIdhcJ4-12MzEsOA6H2ndnBILZz0/view?usp=drive_link)
+
 A powerful face recognition and retrieval system that uses deep learning to find matching faces in large photo collections. Built with **InsightFace** and **FAISS** for lightning-fast similarity search.
 
 ![Face Matching Demo](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)
